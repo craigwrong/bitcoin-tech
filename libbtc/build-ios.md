@@ -1,4 +1,4 @@
-# Building libbtc to target iOS
+# Building libbtc for iOS
 
 ## Make sure it builds for macOS first
 
@@ -18,18 +18,22 @@ Try the tool.
 
     ./bitcointool --version
 
-## Cross-compile for iOS and ARM
+Good. We are able to build and run on macOS. Now let's build it for our original target, iOS.
 
-Clone again to a different folder.
+## Build as static library for iOS
+
+We can leave our Mac version in place and clone the repo again onto a different folder.
 
     git clone https://github.com/libbtc/libbtc libbtc.ios
     cd libbtc.ios
 
-Backup the original autoconf script.
+### Patching the autoconf script
+
+Backup the original autoconf script since we are going to modify it slightly.
 
     cp -p configure.ac configure.ac.original
 
-Patch the autoconf file to disable module recovery and building of the libsecp256k1 dependency which is included as a git subtree.
+Patch the autoconf file to disable module recovery and to avoid building the libsecp256k1 dependency which is included as a git subtree.
 
     cat << 'EOF' | patch -uN configure.ac
     --- configure.ac	2021-04-22 19:32:00.000000000 +0100
@@ -60,48 +64,102 @@ The diff output should just show the two commented-out lines.
     > #ac_configure_args="${ac_configure_args} --enable-module-recovery"
     > #AC_CONFIG_SUBDIRS([src/secp256k1])
 
-To generate a patch use `diff -uN configure.ac.original configure.ac` instead.
+To generate a new patch use `diff -uN configure.ac.original configure.ac` instead.
+
+### Build for iOS
 
 Configure the main library for iOS using minimum configuration. Wallet and network support can optionally be enabled on this step.
+Set the CPU architecture for ARM. 
 
     ./autogen.sh
     ./configure --disable-wallet --disable-tools --disable-net \
-      --disable-shared --host=arm-apple-darwin \
+      --disable-shared --host=arm64-apple-darwin \
       CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphoneos --show-sdk-path` -mios-version-min=14.4"
       
-We won't use `make` just yet as we need to manually build our dependency since we disabled it from the configuration script.
-
-### Build the bundled libsecp256k1
+We won't use `make` just yet as we need to manually build our dependency since we disabled it from the configuration script. Let's build the bundled libsecp256k1.
 
     cd src/secp256k1
-
     ./autogen.sh
 
     # Minimum configuration required to work with libbtc:
     #   --enable-module-recovery --disable-tests --disable-benchmark --disable-ecmult-static-precomputation
-
-    ./configure --enable-module-recovery --disable-tests --disable-benchmark --disable-ecmult-static-precomputation \
-      --disable-shared \
-      --host=arm-apple-darwin \
-      CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphoneos --show-sdk-path` -mios-version-min=14.4"
-
-    # Maximum
+    #
+    # Maximum:
     #   --enable-module-recovery  --enable-module-ecdh --disable-tests --disable-benchmark
+    ./configure --enable-module-recovery --disable-tests --disable-benchmark --disable-ecmult-static-precomputation --disable-shared \
+        --host=arm64-apple-darwin \
+        CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphoneos --show-sdk-path` -mios-version-min=14.4"
 
-    ./configure --enable-module-recovery --enable-module-ecdh --disable-tests --disable-benchmark \
-      --disable-shared \
-      --host=arm-apple-darwin \
-      CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphoneos --show-sdk-path` -mios-version-min=14.4"
-
-Again do not `make` just yet.
-
-### Finish up building the main library
+Again do not `make` just yet. Let's finish up building the main library
 
     cd ../..
     make
 
-    ls .libs
-    # libbtc.a	libbtc.la	libbtc.lai
+Check the output files.
 
+    ls .libs
+    '# libbtc.a	libbtc.la	libbtc.lai
     ls src/secp256k1/.libs
-    # libsecp256k1.a		libsecp256k1.la		libsecp256k1.lai
+    '# libsecp256k1.a		libsecp256k1.la		libsecp256k1.lai
+
+Prepare to create additional versions for all supported architectures and operating systems.
+
+    mv .libs .libs_arm64_ios
+    mv src/secp256k1/.libs src/secp256k1/.libs_arm64_ios
+    make clean
+    
+### Build for simulator
+
+Simulator supports two CPU architectures: `x86_64` and `arm64` on Apple Silicon Macs. Let's start with Intel.
+
+    cd src/secp256k1
+    ./configure --enable-module-recovery --disable-tests --disable-benchmark --disable-ecmult-static-precomputation --disable-shared \
+        --host=x86_64-apple-darwin \
+        CFLAGS="-O3 -arch x86_64 -fembed-bitcode -isysroot `xcrun -sdk iphonesimulator --show-sdk-path` -miphonesimulator-version-min=14.4"
+
+    cd ../..
+    ./configure --disable-wallet --disable-tools --disable-net \
+        --disable-shared --host=x86_64-apple-darwin \
+        CFLAGS="-O3 -arch x86_64 -fembed-bitcode -isysroot `xcrun -sdk iphonesimulator --show-sdk-path` -miphonesimulator-version-min=14.4"
+    make
+    mv .libs .libs_x86_64_iphonesimulator
+    mv src/secp256k1/.libs src/secp256k1/.libs_x86_64_iphonesimulator
+    make clean
+    
+Now build for simulator on `arm64`.
+
+    cd src/secp256k1
+    ./configure --enable-module-recovery --disable-tests --disable-benchmark --disable-ecmult-static-precomputation --disable-shared \
+        --host=arm64-apple-darwin \
+        CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphonesimulator --show-sdk-path` -miphonesimulator-version-min=14.4"
+
+    cd ../..
+    ./configure --disable-wallet --disable-tools --disable-net --disable-shared \
+        --host=arm64-apple-darwin \
+        CFLAGS="-O3 -arch arm64 -fembed-bitcode -isysroot `xcrun -sdk iphonesimulator --show-sdk-path` -miphonesimulator-version-min=14.4"
+    make
+    mv .libs .libs_arm64_iphonesimulator
+    mv src/secp256k1/.libs src/secp256k1/.libs_arm64_iphonesimulator
+    make clean
+
+### Verifying library outputs
+
+We can check the platform for the simulator libraries is `7`. For real iOS devices it should be `2`. 
+
+    otool -l .libs_x86_64_iphonesimulator/libbtc.a | grep "platform"
+    #  platform 7
+    otool -l .libs_arm64_iphonesimulator/libbtc.a | grep "platform"
+    #  platform 7
+    otool -l .libs_arm64_ios/libbtc.a | grep "platform"
+    #  platform 2
+
+### Creating a fat binary
+
+We can't use lipo to create a fat library.
+
+    lipo .libs_arm64_ios/libbtc.a .libs_arm64_iphonesimulator/libbtc.a .libs_x86_64_iphonesimulator/libbtc.a -create -output libbtc.a
+    # fatal error: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo: .libs_arm64_ios/libbtc.a and .libs_arm64_iphonesimulator/libbtc.a have the same architectures (arm64) and can't be in the same fat output file
+
+We need to create an XCFramework instead.
+
+To be continued…
