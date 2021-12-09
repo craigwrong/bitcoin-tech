@@ -33,7 +33,7 @@ Backup the original autoconf script since we are going to modify it slightly.
 
     cp -p configure.ac configure.ac.original
 
-Patch the autoconf file to disable module recovery and to avoid building the libsecp256k1 dependency which is included as a git subtree.
+Patch the autoconf file to disable module recovery and to avoid building the `libsecp256k1` dependency which is included as a git subtree.
 
     cat << 'EOF' | patch -uN configure.ac
     --- configure.ac	2021-04-22 19:32:00.000000000 +0100
@@ -153,13 +153,78 @@ We can check the platform for the simulator libraries is `7`. For real iOS devic
     otool -l .libs_arm64_ios/libbtc.a | grep "platform"
     #  platform 2
 
-### Creating a fat binary
+### Creating an XCFramework
 
-We can't use lipo to create a fat library.
+We can't use `lipo` to create a fat library.
 
     lipo .libs_arm64_ios/libbtc.a .libs_arm64_iphonesimulator/libbtc.a .libs_x86_64_iphonesimulator/libbtc.a -create -output libbtc.a
     # fatal error: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo: .libs_arm64_ios/libbtc.a and .libs_arm64_iphonesimulator/libbtc.a have the same architectures (arm64) and can't be in the same fat output file
 
-We need to create an XCFramework instead.
+So we try to create an XCFramework instead. No luck.
 
-To be continued…
+    xcodebuild -create-xcframework -library .libs_arm64_ios/libbtc.a -library .libs_arm64_iphonesimulator/libbtc.a -library .libs_x86_64_iphonesimulator/libbtc.a -output libbtc.xcframework 
+    # Both 'ios-x86_64-simulator' and 'ios-arm64-simulator' represent two equivalent library definitions.
+
+We'll then try a combination of the two. First we use lipo to combine the two simulator libraries. Then we create a XCFramework with the new simulator fat library and the iOS device version of the library.
+
+    mkdir .libs_iphonesimulator
+    lipo .libs_arm64_iphonesimulator/libbtc.a .libs_x86_64_iphonesimulator/libbtc.a -create -output .libs_iphonesimulator/libbtc.a
+    xcodebuild -create-xcframework -library .libs_arm64_ios/libbtc.a -library .libs_iphonesimulator/libbtc.a -output libbtc.xcframework
+    # xcframework successfully written out to: /Users/d/Developer/gh/third-party/libbtc.ios/libbtc.xcframework
+
+Success. We can inspect the contents of the framework and see that the correct architecture, platform and platform variant values have been specified.
+
+    ls -R libbtc.xcframework
+    # Info.plist            ios-arm64            ios-arm64_x86_64-simulator
+    # 
+    # libbtc.xcframework/ios-arm64:
+    # libbtc.a
+    # 
+    # libbtc.xcframework/ios-arm64_x86_64-simulator:
+    # libbtc.a
+    
+    cat libbtc.xcframework/Info.plist
+    # … 
+    # <plist version="1.0"><dict>
+    #     <key>AvailableLibraries</key>
+    #     <array>
+    #         <dict>
+    #             <key>LibraryIdentifier</key>
+    #             <string>ios-arm64_x86_64-simulator</string>
+    #             <key>LibraryPath</key>
+    #             <string>libbtc.a</string>
+    #             <key>SupportedArchitectures</key>
+    #             <array>
+    #                 <string>arm64</string>
+    #                 <string>x86_64</string>
+    #             </array>
+    #             <key>SupportedPlatform</key>
+    #             <string>ios</string>
+    #             <key>SupportedPlatformVariant</key>
+    #             <string>simulator</string>
+    #         </dict>
+    #         <dict>
+    #             <key>LibraryIdentifier</key>
+    #             <string>ios-arm64</string>
+    #             <key>LibraryPath</key>
+    #             <string>libbtc.a</string>
+    #             <key>SupportedArchitectures</key>
+    #             <array>
+    #                 <string>arm64</string>
+    #             </array>
+    #             <key>SupportedPlatform</key>
+    #             <string>ios</string>
+    #         </dict>
+    #     </array>
+    # …
+
+
+#### Repeat but for `libsecp256k1`
+
+We'll need to again use `lipo` and `xcodebuild -create-xcframework`.
+
+    cd src/secp256k1
+    mkdir .libs_iphonesimulator
+    lipo .libs_arm64_iphonesimulator/libsecp256k1.a .libs_x86_64_iphonesimulator/libsecp256k1.a -create -output .libs_iphonesimulator/libsecp256k1.a
+    xcodebuild -create-xcframework -library .libs_arm64_ios/libsecp256k1.a -library .libs_iphonesimulator/libsecp256k1.a -output ../../libsecp256k1.xcframework
+    # xcframework successfully written out to: /Users/d/Developer/gh/third-party/libbtc.ios/libsecp256k1.xcframework
